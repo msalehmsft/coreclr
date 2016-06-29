@@ -186,7 +186,7 @@ void                CodeGen::genEmitGSCookieCheck(bool pushReg)
         if (compiler->compMethodReturnsMultiRegRetType())
         {
             ReturnTypeDesc retTypeDesc;
-            retTypeDesc.Initialize(compiler, compiler->info.compMethodInfo->args.retTypeClass);
+            retTypeDesc.InitializeReturnType(compiler, compiler->info.compMethodInfo->args.retTypeClass);
             unsigned regCount = retTypeDesc.GetReturnRegCount();
 
             // Only x86 and x64 Unix ABI allows multi-reg return and
@@ -1513,10 +1513,10 @@ CodeGen::genStructReturn(GenTreePtr treeNode)
     {
         GenTreeLclVarCommon* lclVar = op1->AsLclVarCommon();
         LclVarDsc* varDsc = &(compiler->lvaTable[lclVar->gtLclNum]);
-        assert(varDsc->lvIsMultiRegArgOrRet);
+        assert(varDsc->lvIsMultiRegRet);
 
         ReturnTypeDesc retTypeDesc;
-        retTypeDesc.Initialize(compiler, varDsc->lvVerTypeInfo.GetClassHandle());
+        retTypeDesc.InitializeReturnType(compiler, varDsc->lvVerTypeInfo.GetClassHandle());
         unsigned regCount = retTypeDesc.GetReturnRegCount();
         assert(regCount == MAX_RET_REG_COUNT);
 
@@ -2763,11 +2763,11 @@ CodeGen::genMultiRegCallStoreToLocal(GenTreePtr treeNode)
     assert(varTypeIsStruct(treeNode));
 
     // Assumption: current x64 Unix implementation requires that a multi-reg struct
-    // var in 'var = call' is flagged as lvIsMultiRegArgOrRet to prevent it from
+    // var in 'var = call' is flagged as lvIsMultiRegRet to prevent it from
     // being struct promoted.  
     unsigned lclNum = treeNode->AsLclVarCommon()->gtLclNum;
     LclVarDsc* varDsc = &(compiler->lvaTable[lclNum]);
-    noway_assert(varDsc->lvIsMultiRegArgOrRet);
+    noway_assert(varDsc->lvIsMultiRegRet);
 
     GenTree* op1 = treeNode->gtGetOp1();
     GenTree* actualOp1 = op1->gtSkipReloadOrCopy();
@@ -2876,11 +2876,11 @@ CodeGen::genMultiRegCallStoreToLocal(GenTreePtr treeNode)
     assert(varTypeIsLong(treeNode));
 
     // Assumption: current x86 implementation requires that a multi-reg long
-    // var in 'var = call' is flagged as lvIsMultiRegArgOrRet to prevent it from
+    // var in 'var = call' is flagged as lvIsMultiRegRet to prevent it from
     // being promoted.
     unsigned lclNum = treeNode->AsLclVarCommon()->gtLclNum;
     LclVarDsc* varDsc = &(compiler->lvaTable[lclNum]);
-    noway_assert(varDsc->lvIsMultiRegArgOrRet);
+    noway_assert(varDsc->lvIsMultiRegRet);
 
     GenTree* op1 = treeNode->gtGetOp1();
     GenTree* actualOp1 = op1->gtSkipReloadOrCopy();
@@ -6064,7 +6064,7 @@ void CodeGen::genCallInstruction(GenTreePtr node)
             else
             {                
 #ifdef _TARGET_X86_
-                if ((call->gtCallType == CT_HELPER) && (call->gtCallMethHnd == compiler->eeFindHelper(CORINFO_HELP_INIT_PINVOKE_FRAME)))
+                if (call->IsHelperCall(compiler, CORINFO_HELP_INIT_PINVOKE_FRAME))
                 {
                     // The x86 CORINFO_HELP_INIT_PINVOKE_FRAME helper uses a custom calling convention that returns with
                     // TCB in REG_PINVOKE_TCB. AMD64/ARM64 use the standard calling convention. fgMorphCall() sets the

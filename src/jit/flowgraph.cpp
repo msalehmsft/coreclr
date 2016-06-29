@@ -8207,7 +8207,7 @@ void                Compiler::fgAddInternal()
         {
             lvaTable[genReturnLocal].lvType = TYP_STRUCT;
             lvaSetStruct(genReturnLocal, info.compMethodInfo->args.retTypeClass, true);
-            lvaTable[genReturnLocal].lvIsMultiRegArgOrRet = true;
+            lvaTable[genReturnLocal].lvIsMultiRegRet = true;
         }
         else
         {
@@ -20590,7 +20590,7 @@ void                Compiler::fgDebugCheckFlags(GenTreePtr tree)
     {
         // Print the tree so we can see it in the log.
         printf("Missing flags on tree [%X]: ", tree);
-        GenTree::gtDispFlags(chkFlags & ~treeFlags);
+        GenTree::gtDispFlags(chkFlags & ~treeFlags, GTF_DEBUG_NONE);
         printf("\n");
         gtDispTree(tree);
 
@@ -20598,7 +20598,7 @@ void                Compiler::fgDebugCheckFlags(GenTreePtr tree)
 
         // Print the tree again so we can see it right after we hook up the debugger.
         printf("Missing flags on tree [%X]: ", tree);
-        GenTree::gtDispFlags(chkFlags & ~treeFlags);
+        GenTree::gtDispFlags(chkFlags & ~treeFlags, GTF_DEBUG_NONE);
         printf("\n");
         gtDispTree(tree);
     }
@@ -20617,7 +20617,7 @@ void                Compiler::fgDebugCheckFlags(GenTreePtr tree)
         {
             // Print the tree so we can see it in the log.
             printf("Extra GTF_CALL flags on parent tree [%X]: ", tree);
-            GenTree::gtDispFlags(treeFlags & ~chkFlags);
+            GenTree::gtDispFlags(treeFlags & ~chkFlags, GTF_DEBUG_NONE);
             printf("\n");
             gtDispTree(tree);
 
@@ -20625,7 +20625,7 @@ void                Compiler::fgDebugCheckFlags(GenTreePtr tree)
 
             // Print the tree again so we can see it right after we hook up the debugger.
             printf("Extra GTF_CALL flags on parent tree [%X]: ", tree);
-            GenTree::gtDispFlags(treeFlags & ~chkFlags);
+            GenTree::gtDispFlags(treeFlags & ~chkFlags, GTF_DEBUG_NONE);
             printf("\n");
             gtDispTree(tree);
         }
@@ -21504,10 +21504,10 @@ GenTreePtr Compiler::fgAssignStructInlineeToVar(GenTreePtr child, CORINFO_CLASS_
         newInlinee = gtNewAssignNode(dst, src);
 
         // When returning a multi-register value in a local var, make sure the variable is
-        // marked as lvIsMultiRegArgOrRet, so it does not get promoted.
+        // marked as lvIsMultiRegRet, so it does not get promoted.
         if (src->AsCall()->HasMultiRegRetVal())
         {
-            lvaTable[tmpNum].lvIsMultiRegArgOrRet = true;
+            lvaTable[tmpNum].lvIsMultiRegRet = true;
         }
 
         // If inlinee was comma, but a deeper call, new inlinee is (, , , v05 = call())

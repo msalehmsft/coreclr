@@ -89,7 +89,7 @@ GenTreePtr          Compiler::fgMorphIntoHelperCall(GenTreePtr      tree,
         GenTreeCall* callNode = tree->AsCall();
         ReturnTypeDesc* retTypeDesc = callNode->GetReturnTypeDesc();
         retTypeDesc->Reset();
-        retTypeDesc->Initialize(this, callNode->gtRetClsHnd);
+        retTypeDesc->InitializeReturnType(this, callNode->gtRetClsHnd);
         callNode->ClearOtherRegs();
         
         NYI("Helper with TYP_LONG return type");
@@ -2599,13 +2599,15 @@ GenTreeCall* Compiler::fgMorphArgs(GenTreeCall* callNode)
 #endif
 
 #ifndef LEGACY_BACKEND
-    // data structure for keeping track of non-standard args we insert
-    // (args that have a special meaning and are not passed following the normal
-    // calling convention or even in the normal arg regs.
+    // Data structure for keeping track of non-standard args. Non-standard args are those that are not passed
+    // following the normal calling convention or in the normal argument registers. We either mark existing
+    // arguments as non-standard (such as the x8 return buffer register on ARM64), or we manually insert the
+    // non-standard arguments into the argument list, below.
     struct NonStandardArg
     {
-        regNumber reg;
-        GenTree*  node;
+        regNumber reg;      // The register to be assigned to this non-standard argument.
+        GenTree*  node;     // The tree node representing this non-standard argument.
+                            //   Note that this must be updated if the tree node changes due to morphing!
     };
 
     ArrayStack<NonStandardArg> nonStandardArgs(this, 3);  // We will have at most 3 non-standard arguments
@@ -2650,12 +2652,19 @@ GenTreeCall* Compiler::fgMorphArgs(GenTreeCall* callNode)
             numArgs++;
         }
 
-        // insert nonstandard args (outside the calling convention)
+        // Insert or mark non-standard args. These are either outside the normal calling convention, or
+        // arguments registers that don't follow the normal progression of argument registers in the calling
+        // convention (such as for the ARM64 fixed return buffer argument x8).
+        //
+        // *********** NOTE *************
+        // The logic here must remain in sync with GetNonStandardAddedArgCount(), which is used to map arguments
+        // in the implementation of fast tail call.
+        // *********** END NOTE *********
 
 #if !defined(LEGACY_BACKEND) && defined(_TARGET_X86_)
         // The x86 CORINFO_HELP_INIT_PINVOKE_FRAME helper has a custom calling convention. Set the argument registers
         // correctly here.
-        if ((call->gtCallType == CT_HELPER) && (call->gtCallMethHnd == eeFindHelper(CORINFO_HELP_INIT_PINVOKE_FRAME)))
+        if (call->IsHelperCall(this, CORINFO_HELP_INIT_PINVOKE_FRAME))
         {
             GenTreeArgList* args = call->gtCallArgs;
             GenTree* arg1 = args->Current();
@@ -4461,7 +4470,7 @@ GenTreePtr    Compiler::fgMorphMultiregStructArg(GenTreePtr arg, fgArgTabEntryPt
         //
         assert((varDsc->lvSize() == 2*TARGET_POINTER_SIZE) || varDsc->lvIsHfa());
 
-        varDsc->lvIsMultiRegArgOrRet = true;
+        varDsc->lvIsMultiRegArg = true;
 
 #ifdef DEBUG
         if (verbose)
@@ -4512,7 +4521,7 @@ GenTreePtr    Compiler::fgMorphMultiregStructArg(GenTreePtr arg, fgArgTabEntryPt
 
         // Is this LclVar a promoted struct with exactly 2 fields?
         // TODO-ARM64-CQ: Support struct promoted HFA types here
-        if (varDsc->lvPromoted && (varDsc->lvFieldCnt == 2))
+        if (varDsc->lvPromoted && (varDsc->lvFieldCnt == 2) && !varDsc->lvIsHfa())
         {
             // See if we have two promoted fields that start at offset 0 and 8?
             unsigned loVarNum = lvaGetFieldLocal(varDsc, 0);
@@ -4893,9 +4902,9 @@ void                Compiler::fgFixupStructReturn(GenTreePtr     callNode)
 
     if (!callHasRetBuffArg && varTypeIsStruct(call))
     {
-#ifdef FEATURE_HFA
+#if FEATURE_MULTIREG_RET
         if (call->gtCall.IsVarargs() || !IsHfa(call))
-#endif 
+#endif // FEATURE_MULTIREG_RET
         {
             // Now that we are past the importer, re-type this node so the register predictor does
             // the right thing
@@ -5362,7 +5371,7 @@ GenTreePtr          Compiler::fgMorphArrayIndex(GenTreePtr tree)
     addr = gtNewOperNode(GT_ADD, TYP_BYREF, addr, cns);
 
 #if SMALL_TREE_NODES
-    assert(tree->gtFlags & GTF_NODE_LARGE);
+    assert(tree->gtDebugFlags & GTF_DEBUG_NODE_LARGE);
 #endif
 
     // Change the orginal GT_INDEX node into a GT_IND node
@@ -5445,7 +5454,7 @@ GenTreePtr          Compiler::fgMorphArrayIndex(GenTreePtr tree)
         }
     }
 
-    assert(!fgGlobalMorph || (arrElem->gtFlags & GTF_MORPHED));
+    assert(!fgGlobalMorph || (arrElem->gtDebugFlags & GTF_DEBUG_NODE_MORPHED));
 
     addr = arrElem->gtOp.gtOp1;
 
@@ -7080,7 +7089,7 @@ GenTreePtr          Compiler::fgMorphCall(GenTreeCall* call)
                     szFailReason = "Opportunistic tail call cannot be dispatched as epilog+jmp";
                 }
 #ifndef LEGACY_BACKEND
-                else if (!call->IsVirtualStub() && call->HasNonStandardArgs())
+                else if (!call->IsVirtualStub() && call->HasNonStandardAddedArgs(this))
                 {
                     // If we are here, it means that the call is an explicitly ".tail" prefixed and cannot be
                     // dispatched as a fast tail call.
@@ -7090,7 +7099,7 @@ GenTreePtr          Compiler::fgMorphCall(GenTreeCall* call)
                     // tail calling the target method and hence ".tail" prefix on such calls needs to be
                     // ignored.
                     //
-                    // Exception to the above rule: although Virtual Stub Dispatch (VSD) calls though require
+                    // Exception to the above rule: although Virtual Stub Dispatch (VSD) calls require
                     // extra stub param (e.g. in R11 on Amd64), they can still be called via tail call helper. 
                     // This is done by by adding stubAddr as an additional arg before the original list of 
                     // args. For more details see fgMorphTailCall() and CreateTailCallCopyArgsThunk()
@@ -7640,7 +7649,7 @@ NO_TAIL_CALL:
         copyBlk = fgMorphTree(copyBlk);
         GenTree* result = gtNewOperNode(GT_COMMA, TYP_VOID, call, copyBlk);
 #ifdef DEBUG
-        result->gtFlags |= GTF_MORPHED;
+        result->gtDebugFlags |= GTF_DEBUG_NODE_MORPHED;
 #endif
         return result;
     }
@@ -8319,7 +8328,7 @@ GenTreePtr          Compiler::fgMorphInitBlock(GenTreePtr tree)
     }
 
 #ifdef DEBUG
-    tree->gtFlags |= GTF_MORPHED;
+    tree->gtDebugFlags |= GTF_DEBUG_NODE_MORPHED;
 
     if (verbose)
     {
@@ -8951,7 +8960,7 @@ GenTreePtr          Compiler::fgMorphCopyBlock(GenTreePtr tree)
     }
 
 #ifdef DEBUG
-    tree->gtFlags |= GTF_MORPHED;
+    tree->gtDebugFlags |= GTF_DEBUG_NODE_MORPHED;
 
     if (verbose)
     {
@@ -9202,7 +9211,7 @@ GenTreePtr Compiler::fgMorphFieldToSIMDIntrinsicGet(GenTreePtr tree)
         GenTree* op2 = gtNewIconNode(index);   
         tree =  gtNewSIMDNode(baseType, simdStructNode, op2, SIMDIntrinsicGetItem, baseType, simdSize); 
 #ifdef DEBUG
-        tree->gtFlags |= GTF_MORPHED;
+        tree->gtDebugFlags |= GTF_DEBUG_NODE_MORPHED;
 #endif
     }
     return tree;
@@ -9265,7 +9274,7 @@ GenTreePtr  Compiler::fgMorphFieldAssignToSIMDIntrinsicSet(GenTreePtr tree)
                             gtNewIconNode(simdSize),
                             false);
 #ifdef DEBUG
-        tree->gtFlags |= GTF_MORPHED;
+        tree->gtDebugFlags |= GTF_DEBUG_NODE_MORPHED;
 #endif
     }
     
@@ -9684,7 +9693,7 @@ NO_MUL_64RSLT:
             {
                 GenTreePtr zeroNode = gtNewZeroConNode(typ);
 #ifdef DEBUG
-                zeroNode->gtFlags |= GTF_MORPHED;
+                zeroNode->gtDebugFlags |= GTF_DEBUG_NODE_MORPHED;
 #endif
                 DEBUG_DESTROY_NODE(tree);
                 return zeroNode;
@@ -11635,7 +11644,7 @@ CM_ADD_OP:
             commaNode->gtType = typ;
             commaNode->gtFlags = (treeFlags & ~GTF_REVERSE_OPS); // Bashing the GT_COMMA flags here is dangerous, clear the GTF_REVERSE_OPS at least.
 #ifdef DEBUG
-            commaNode->gtFlags |= GTF_MORPHED;
+            commaNode->gtDebugFlags |= GTF_DEBUG_NODE_MORPHED;
 #endif
             while (commaNode->gtOp.gtOp2->gtOper == GT_COMMA)
             {
@@ -11643,7 +11652,7 @@ CM_ADD_OP:
                 commaNode->gtType = typ;
                 commaNode->gtFlags = (treeFlags & ~GTF_REVERSE_OPS); // Bashing the GT_COMMA flags here is dangerous, clear the GTF_REVERSE_OPS at least.
 #ifdef DEBUG
-                commaNode->gtFlags |= GTF_MORPHED;
+                commaNode->gtDebugFlags |= GTF_DEBUG_NODE_MORPHED;
 #endif
             }
             bool wasArrIndex = (tree->gtFlags & GTF_IND_ARR_INDEX) != 0;
@@ -11662,7 +11671,7 @@ CM_ADD_OP:
                 GetArrayInfoMap()->Set(op1, arrInfo);
             }
 #ifdef DEBUG
-            op1->gtFlags |= GTF_MORPHED;
+            op1->gtDebugFlags |= GTF_DEBUG_NODE_MORPHED;
 #endif
             commaNode->gtOp.gtOp2 = op1;
             return tree;
@@ -11745,7 +11754,7 @@ CM_ADD_OP:
             {
                 commaNode->gtType = op1->gtType; commaNode->gtFlags |= op1->gtFlags;
 #ifdef DEBUG
-                commaNode->gtFlags |= GTF_MORPHED;
+                commaNode->gtDebugFlags |= GTF_DEBUG_NODE_MORPHED;
 #endif
                 commaNode = commaNode->gtOp.gtOp2;
             }
@@ -12743,7 +12752,7 @@ GenTree* Compiler::fgMorphModByConst(GenTreeOp* tree)
     GenTree* sub = gtNewOperNode(GT_SUB, type, numerator, mul);
 
 #ifdef DEBUG
-    sub->gtFlags |= GTF_MORPHED;
+    sub->gtDebugFlags |= GTF_DEBUG_NODE_MORPHED;
 #endif
 
     return sub;
@@ -12797,7 +12806,7 @@ GenTree* Compiler::fgMorphModToSubMulDiv(GenTreeOp* tree)
     GenTree* sub = gtNewOperNode(GT_SUB, type, gtCloneExpr(numerator), mul);
 
 #ifdef DEBUG
-    sub->gtFlags |= GTF_MORPHED;
+    sub->gtDebugFlags |= GTF_DEBUG_NODE_MORPHED;
 #endif
 
     return sub;
@@ -12883,7 +12892,7 @@ GenTree* Compiler::fgMorphDivByConst(GenTreeOp* tree)
     DISPTREE(result);
 
 #ifdef DEBUG
-    result->gtFlags |= GTF_MORPHED;
+    result->gtDebugFlags |= GTF_DEBUG_NODE_MORPHED;
 #endif
 
     return result;
@@ -13401,7 +13410,7 @@ GenTreePtr          Compiler::fgMorphTree(GenTreePtr tree, MorphAddrContext* mac
     if (fgGlobalMorph)
     {
         /* Ensure that we haven't morphed this node already */
-        assert(((tree->gtFlags & GTF_MORPHED) == 0) && "ERROR: Already morphed this node!");
+        assert(((tree->gtDebugFlags & GTF_DEBUG_NODE_MORPHED) == 0) && "ERROR: Already morphed this node!");
 
 #if LOCAL_ASSERTION_PROP
         /* Before morphing the tree, we try to propagate any active assertions */
@@ -13607,7 +13616,7 @@ void                Compiler::fgKillDependentAssertions(unsigned lclNum
  *
  *  This function is called to complete the morphing of a tree node
  *  It should only be called once for each node.
- *  If DEBUG is defined the flag GTF_MORPHED is checked and updated,
+ *  If DEBUG is defined the flag GTF_DEBUG_NODE_MORPHED is checked and updated,
  *  to enforce the invariant that each node is only morphed once.
  *  If LOCAL_ASSERTION_PROP is enabled the result tree may be replaced
  *  by an equivalent tree.
@@ -13633,7 +13642,7 @@ void                Compiler::fgMorphTreeDone(GenTreePtr tree,
     if ((oldTree != NULL) && (oldTree != tree))
     {
         /* Ensure that we have morphed this node */
-        assert((tree->gtFlags & GTF_MORPHED) && "ERROR: Did not morph this node!");
+        assert((tree->gtDebugFlags & GTF_DEBUG_NODE_MORPHED) && "ERROR: Did not morph this node!");
 
 #ifdef DEBUG
         TransferTestDataToNode(oldTree, tree);
@@ -13642,7 +13651,7 @@ void                Compiler::fgMorphTreeDone(GenTreePtr tree,
     else
     {
         // Ensure that we haven't morphed this node already 
-        assert(((tree->gtFlags & GTF_MORPHED) == 0) && "ERROR: Already morphed this node!");
+        assert(((tree->gtDebugFlags & GTF_DEBUG_NODE_MORPHED) == 0) && "ERROR: Already morphed this node!");
     }
 
     if (tree->OperKind() & GTK_CONST)
@@ -13676,7 +13685,7 @@ DONE:;
 
 #ifdef DEBUG
     /* Mark this node as being morphed */
-    tree->gtFlags |= GTF_MORPHED;
+    tree->gtDebugFlags |= GTF_DEBUG_NODE_MORPHED;
 #endif
 }
 
@@ -14249,7 +14258,7 @@ void                Compiler::fgMorphStmts(BasicBlock * block,
                but the flag still got set, clear it here...  */
 
 #ifdef DEBUG
-            tree->gtFlags &= ~GTF_MORPHED;
+            tree->gtDebugFlags &= ~GTF_DEBUG_NODE_MORPHED;
 #endif
             noway_assert(compTailCallUsed);
             noway_assert((tree->gtOper == GT_CALL) && tree->AsCall()->IsTailCall());
@@ -15696,11 +15705,15 @@ void                Compiler::fgPromoteStructs()
             tooManyLocals = true;
         }
 #if !FEATURE_MULTIREG_STRUCT_PROMOTE
-        else if (varDsc->lvIsMultiRegArgOrRet)
+        else if (varDsc->lvIsMultiRegArg)
         {
-            JITDUMP("Skipping V%02u: marked lvIsMultiRegArgOrRet.\n", lclNum);
+            JITDUMP("Skipping V%02u: marked lvIsMultiRegArg.\n", lclNum);
         }
 #endif // !FEATURE_MULTIREG_STRUCT_PROMOTE
+        else if (varDsc->lvIsMultiRegRet)
+        {
+            JITDUMP("Skipping V%02u: marked lvIsMultiRegRet.\n", lclNum);
+        }
         else if (varTypeIsStruct(varDsc))
         {
             lvaCanPromoteStructVar(lclNum, &structPromotionInfo);

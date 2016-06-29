@@ -1148,7 +1148,7 @@ GenTreePtr Compiler::impAssignStructPtr(GenTreePtr      dest,
                 assert(!src->gtCall.IsVarargs() && "varargs not allowed for System V OSs.");
 
                 // Make the struct non promotable. The eightbytes could contain multiple fields.
-                lvaTable[lcl->gtLclVarCommon.gtLclNum].lvIsMultiRegArgOrRet = true;
+                lvaTable[lcl->gtLclVarCommon.gtLclNum].lvIsMultiRegRet = true;
 #endif
             }
             else
@@ -7376,6 +7376,14 @@ GenTreePtr                Compiler::impFixupCallStructReturn(GenTreePtr     call
 
     call->gtCall.gtRetClsHnd = retClsHnd;
 
+    GenTreeCall* callNode = call->AsCall();
+
+#if FEATURE_MULTIREG_RET
+    // Initialize Return type descriptor of call node    
+    ReturnTypeDesc* retTypeDesc = callNode->GetReturnTypeDesc();
+    retTypeDesc->InitializeReturnType(this, retClsHnd);
+#endif // FEATURE_MULTIREG_RET
+
 #if FEATURE_MULTIREG_RET && defined(FEATURE_HFA)
     // There is no fixup necessary if the return type is a HFA struct.
     // HFA structs are returned in registers for ARM32 and ARM64
@@ -7407,18 +7415,12 @@ GenTreePtr                Compiler::impFixupCallStructReturn(GenTreePtr     call
     }
 #elif defined(FEATURE_UNIX_AMD64_STRUCT_PASSING)
 
-    GenTreeCall* callNode = call->AsCall();
-
     // Not allowed for FEATURE_CORCLR which is the only SKU available for System V OSs.
     assert(!callNode->IsVarargs() && "varargs not allowed for System V OSs.");
 
     // The return type will remain as the incoming struct type unless normalized to a
     // single eightbyte return type below.
     callNode->gtReturnType = call->gtType;
-
-    // Initialize Return type descriptor of call node    
-    ReturnTypeDesc* retTypeDesc = callNode->GetReturnTypeDesc();
-    retTypeDesc->Initialize(this, retClsHnd);
 
     unsigned retRegCount = retTypeDesc->GetReturnRegCount();
     if (retRegCount != 0)
@@ -7501,7 +7503,7 @@ GenTreePtr                Compiler::impInitCallReturnTypeDesc(GenTreePtr     cal
 
     // Initialize Return type descriptor of call node
     ReturnTypeDesc* retTypeDesc = callNode->GetReturnTypeDesc();
-    retTypeDesc->Initialize(this, retClsHnd);
+    retTypeDesc->InitializeReturnType(this, retClsHnd);
 
     unsigned retRegCount = retTypeDesc->GetReturnRegCount();
     // must be a long returned in two registers
@@ -7539,7 +7541,7 @@ GenTreePtr          Compiler::impFixupStructReturnType(GenTreePtr op, CORINFO_CL
         {
             // Make sure that this struct stays in memory and doesn't get promoted.
             unsigned lclNum = op->gtLclVarCommon.gtLclNum;
-            lvaTable[lclNum].lvIsMultiRegArgOrRet = true;
+            lvaTable[lclNum].lvIsMultiRegRet = true;
 
             return op;
         }
@@ -7563,7 +7565,7 @@ GenTreePtr          Compiler::impFixupStructReturnType(GenTreePtr op, CORINFO_CL
             // This LCL_VAR is an HFA return value, it stays as a TYP_STRUCT
             unsigned lclNum = op->gtLclVarCommon.gtLclNum;
             // Make sure this struct type stays as struct so that we can return it as an HFA
-            lvaTable[lclNum].lvIsMultiRegArgOrRet = true;
+            lvaTable[lclNum].lvIsMultiRegRet = true;
             return op;
         }
          
@@ -13162,7 +13164,7 @@ FIELD_DONE:
                         // rdi/rsi (depending whether there is a "this").
 
                         unsigned   tmp = lvaGrabTemp(true DEBUGARG("UNBOXing a register returnable nullable"));
-                        lvaTable[tmp].lvIsMultiRegArgOrRet = true;
+                        lvaTable[tmp].lvIsMultiRegArg = true;
                         lvaSetStruct(tmp, resolvedToken.hClass, true  /* unsafe value cls check */);
 
                         op2 = gtNewLclvNode(tmp, TYP_STRUCT);
@@ -13971,7 +13973,7 @@ void Compiler::impMarkLclDstNotPromotable(unsigned tmpNum, GenTreePtr src, CORIN
             (hfaType == TYP_FLOAT && hfaSlots == sizeof(float) / REGSIZE_BYTES))
         {
             // Make sure this struct type stays as struct so we can receive the call in a struct.
-            lvaTable[tmpNum].lvIsMultiRegArgOrRet = true;
+            lvaTable[tmpNum].lvIsMultiRegRet = true;
         }
     }
 }
@@ -13990,7 +13992,7 @@ GenTreePtr Compiler::impAssignMultiRegTypeToVar(GenTreePtr op, CORINFO_CLASS_HAN
     assert(IsMultiRegReturnedType(hClass));
 
     // Mark the var so that fields are not promoted and stay together.
-    lvaTable[tmpNum].lvIsMultiRegArgOrRet = true;
+    lvaTable[tmpNum].lvIsMultiRegRet = true;
 #endif // defined(FEATURE_UNIX_AMD64_STRUCT_PASSING)
 
     return ret;
@@ -14236,7 +14238,7 @@ bool Compiler::impReturnInstruction(BasicBlock *block, int prefixFlags, OPCODE &
                     // Same as !IsHfa but just don't bother with impAssignStructPtr.
 #else // defined(FEATURE_UNIX_AMD64_STRUCT_PASSING)
                 ReturnTypeDesc retTypeDesc;
-                retTypeDesc.Initialize(this, retClsHnd);
+                retTypeDesc.InitializeReturnType(this, retClsHnd);
                 unsigned retRegCount = retTypeDesc.GetReturnRegCount();
 
                 if (retRegCount != 0)

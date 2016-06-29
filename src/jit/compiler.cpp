@@ -2081,43 +2081,57 @@ void                Compiler::compInitOptions(CORJIT_FLAGS* jitFlags)
     {
         LPCWSTR dumpIRFormat = nullptr;
 
-        if (opts.eeFlags & CORJIT_FLG_PREJIT)
+        // We should only enable 'verboseDump' when we are actually compiling a matching method
+        // and not enable it when we are just considering inlining a matching method.
+        //
+        if (!compIsForInlining())
         {
-            if (JitConfig.NgenDump().contains(info.compMethodName, info.compClassName, &info.compMethodInfo->args))
-                verboseDump = true;
-
-            unsigned ngenHashDumpVal = (unsigned) JitConfig.NgenHashDump();
-            if ((ngenHashDumpVal != (DWORD)-1) && (ngenHashDumpVal == info.compMethodHash()))
-                verboseDump = true;
-
-            if (JitConfig.NgenDumpIR().contains(info.compMethodName, info.compClassName, &info.compMethodInfo->args))
-                dumpIR = true;
-
-            unsigned ngenHashDumpIRVal = (unsigned) JitConfig.NgenHashDumpIR();
-            if ((ngenHashDumpIRVal != (DWORD)-1) && (ngenHashDumpIRVal == info.compMethodHash()))
-                dumpIR = true;
-
-            dumpIRFormat = JitConfig.NgenDumpIRFormat();
-            dumpIRPhase = JitConfig.NgenDumpIRPhase();
-        }
-        else
-        {
-            if (JitConfig.JitDump().contains(info.compMethodName, info.compClassName, &info.compMethodInfo->args))
-                verboseDump = true;
-
-            unsigned jitHashDumpVal = (unsigned) JitConfig.JitHashDump();
-            if ((jitHashDumpVal != (DWORD)-1) && (jitHashDumpVal == info.compMethodHash()))
-                verboseDump = true;
-
-            if (JitConfig.JitDumpIR().contains(info.compMethodName, info.compClassName, &info.compMethodInfo->args))
-                dumpIR = true;
-
-            unsigned jitHashDumpIRVal = (unsigned) JitConfig.JitHashDumpIR();
-            if ((jitHashDumpIRVal != (DWORD)-1) && (jitHashDumpIRVal == info.compMethodHash()))
-                dumpIR = true;
-
-            dumpIRFormat = JitConfig.JitDumpIRFormat();
-            dumpIRPhase = JitConfig.JitDumpIRPhase();
+            if (opts.eeFlags & CORJIT_FLG_PREJIT)
+            {
+                if (JitConfig.NgenDump().contains(info.compMethodName, info.compClassName, &info.compMethodInfo->args))
+                {
+                    verboseDump = true;
+                }                
+                unsigned ngenHashDumpVal = (unsigned) JitConfig.NgenHashDump();
+                if ((ngenHashDumpVal != (DWORD)-1) && (ngenHashDumpVal == info.compMethodHash()))
+                {
+                    verboseDump = true;
+                }
+                if (JitConfig.NgenDumpIR().contains(info.compMethodName, info.compClassName, &info.compMethodInfo->args))
+                {
+                    dumpIR = true;
+                }
+                unsigned ngenHashDumpIRVal = (unsigned) JitConfig.NgenHashDumpIR();
+                if ((ngenHashDumpIRVal != (DWORD)-1) && (ngenHashDumpIRVal == info.compMethodHash()))
+                {
+                    dumpIR = true;
+                }                
+                dumpIRFormat = JitConfig.NgenDumpIRFormat();
+                dumpIRPhase = JitConfig.NgenDumpIRPhase();
+            }
+            else
+            {
+                if (JitConfig.JitDump().contains(info.compMethodName, info.compClassName, &info.compMethodInfo->args))
+                {
+                    verboseDump = true;
+                }
+                unsigned jitHashDumpVal = (unsigned) JitConfig.JitHashDump();
+                if ((jitHashDumpVal != (DWORD)-1) && (jitHashDumpVal == info.compMethodHash()))
+                {
+                    verboseDump = true;
+                }                
+                if (JitConfig.JitDumpIR().contains(info.compMethodName, info.compClassName, &info.compMethodInfo->args))
+                {
+                    dumpIR = true;
+                }                
+                unsigned jitHashDumpIRVal = (unsigned) JitConfig.JitHashDumpIR();
+                if ((jitHashDumpIRVal != (DWORD)-1) && (jitHashDumpIRVal == info.compMethodHash()))
+                {
+                    dumpIR = true;
+                }                
+                dumpIRFormat = JitConfig.JitDumpIRFormat();
+                dumpIRPhase = JitConfig.JitDumpIRPhase();
+            }
         }
 
         if (dumpIRPhase == nullptr)
@@ -2562,6 +2576,7 @@ void                Compiler::compInitOptions(CORJIT_FLAGS* jitFlags)
     {
         printf("****** START compiling %s (MethodHash=%08x)\n",
                info.compFullName, info.compMethodHash());
+        printf("Generating code for %s %s\n", Target::g_tgtPlatformName, Target::g_tgtCPUName);
         printf("");         // in our logic this causes a flush
     }
 
@@ -6560,6 +6575,7 @@ void JitTimer::PrintCsvHeader()
         // Ex: ngen install mscorlib won't print stats for "ngen" but for "mscorsvw"
         FILE* fp = _wfopen(jitTimeLogCsv, W("w"));
         fprintf(fp, "\"Method Name\",");
+        fprintf(fp, "\"Method Index\",");
         fprintf(fp, "\"IL Bytes\",");
         fprintf(fp, "\"Basic Blocks\",");
         fprintf(fp, "\"Opt Level\",");
@@ -6575,6 +6591,8 @@ void JitTimer::PrintCsvHeader()
     }
 }
 
+extern ICorJitHost* g_jitHost;
+
 void JitTimer::PrintCsvMethodStats(Compiler* comp)
 {
     LPCWSTR jitTimeLogCsv = Compiler::JitTimeLogCsv();
@@ -6586,10 +6604,20 @@ void JitTimer::PrintCsvMethodStats(Compiler* comp)
     // eeGetMethodFullName uses locks, so don't enter crit sec before this call.
     const char* methName = comp->eeGetMethodFullName(comp->info.compMethodHnd);
 
+    // Try and access the SPMI index to report in the data set.
+    //
+    // If the jit is not hosted under SPMI this will return the
+    // default value of zero.
+    //
+    // Query the jit host directly here instead of going via the
+    // config cache, since value will change for each method.
+    int index = g_jitHost->getIntConfigValue(W("SuperPMIMethodContextNumber"), 0);
+
     CritSecHolder csvLock(s_csvLock);
 
     FILE* fp = _wfopen(jitTimeLogCsv, W("a"));
     fprintf(fp, "\"%s\",", methName);
+    fprintf(fp, "%d,", index);
     fprintf(fp, "%u,", comp->info.compILCodeSize);
     fprintf(fp, "%u,", comp->fgBBcount);
     fprintf(fp, "%u,", comp->opts.MinOpts());
@@ -7643,35 +7671,30 @@ int cTreeFlagsIR(Compiler *comp, GenTree *tree)
 
     if (tree->gtFlags != 0)
     {
-        if (!comp->dumpIRNodes)
-        {
-            if ((tree->gtFlags & (~(GTF_NODE_LARGE|GTF_NODE_SMALL))) == 0)
-            {
-                return chars;
-            }
-        }
-
         chars += printf("flags=");
 
         // Node flags
 
-#if defined(DEBUG) && SMALL_TREE_NODES
+#if defined(DEBUG)
+#if SMALL_TREE_NODES
         if (comp->dumpIRNodes)
         {
-            if (tree->gtFlags & GTF_NODE_LARGE)
+            if (tree->gtDebugFlags & GTF_DEBUG_NODE_LARGE)
             {
                 chars += printf("[NODE_LARGE]");
             }
-            if (tree->gtFlags & GTF_NODE_SMALL)
+            if (tree->gtDebugFlags & GTF_DEBUG_NODE_SMALL)
             {
                 chars += printf("[NODE_SMALL]");
             }
         }
-#endif
-        if (tree->gtFlags & GTF_MORPHED)
+#endif // SMALL_TREE_NODES
+        if (tree->gtDebugFlags & GTF_DEBUG_NODE_MORPHED)
         {
             chars += printf("[MORPHED]");
         }
+#endif // defined(DEBUG)
+
         if (tree->gtFlags & GTF_COLON_COND)
         {
             chars += printf("[COLON_COND]");
@@ -7723,10 +7746,12 @@ int cTreeFlagsIR(Compiler *comp, GenTree *tree)
             {
                 chars += printf("[VAR_ARR_INDEX]");
             }
-            if (tree->gtFlags & GTFD_VAR_CSE_REF)
+#if defined(DEBUG)
+            if (tree->gtDebugFlags & GTF_DEBUG_VAR_CSE_REF)
             {
                 chars += printf("[VAR_CSE_REF]");
             }
+#endif
             if (op == GT_REG_VAR)
             {
                 if (tree->gtFlags & GTF_REG_BIRTH)
