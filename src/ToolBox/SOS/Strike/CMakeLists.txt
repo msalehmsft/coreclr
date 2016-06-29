@@ -124,13 +124,8 @@ else(WIN32)
     strike.cpp
     sos.cpp
     util.cpp
+    ../../../coreclr/hosts/unixcoreruncommon/coreruncommon.cpp
   )
-  if(CLR_CMAKE_PLATFORM_DARWIN)
-    set(SOS_SOURCES
-      ${SOS_SOURCES}
-      ../../../coreclr/hosts/unixcoreruncommon/coreruncommon.cpp
-    )
-  endif(CLR_CMAKE_PLATFORM_DARWIN)
 
   set(SOS_LIBRARY
     corguids
@@ -138,6 +133,7 @@ else(WIN32)
     dbgutil
     # share the PAL in the dac module
     mscordaccore
+    palrt
   )
 
   set(DEF_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/sos_unixexports.src)
