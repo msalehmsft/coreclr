@@ -12869,6 +12869,19 @@ BasicBlock* BasicBlock::GetSucc(unsigned i, Compiler * comp)
     }
 }
 
+// -------------------------------------------------------------------------
+// IsRegOptional: Returns true if this gentree node is marked by lowering to
+// indicate that codegen can still generate code even if it wasn't allocated
+// a register.
+bool GenTree::IsRegOptional() const
+{
+#ifdef LEGACY_BACKEND
+    return false;
+#else
+    return gtLsraInfo.regOptional;
+#endif
+}
+
 bool GenTree::IsPhiDefn()
 {
     bool res = 
@@ -13234,6 +13247,14 @@ bool GenTree::isContained() const
     case GT_END_LFIN:
 #endif
         return false;
+
+#if !defined(LEGACY_BACKEND) && !defined(_TARGET_64BIT_)
+    case GT_LONG:
+        // GT_LONG nodes are normally contained. The only exception is when the result
+        // of a TYP_LONG operation is not used and this can only happen if the GT_LONG
+        // is the last node in the statement (in linear order).
+        return gtNext != nullptr;
+#endif
 
     case GT_CALL:
         // Note: if you hit this assert you are probably calling isContained() 

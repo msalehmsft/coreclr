@@ -1068,7 +1068,7 @@ def static addTriggers(def job, def branch, def isPR, def architecture, def os, 
             }
             break
         case 'arm64':
-            assert (scenario == 'default') || (scenario == 'pri1r2r') || (scenario == 'gcstress0xc')
+            assert (scenario == 'default') || (scenario == 'pri1r2r') || (scenario == 'gcstress0x3') || (scenario == 'gcstress0xc')
 
             // Set up a private trigger
             def contextString = "${os} ${architecture} Cross ${configuration}"
@@ -1089,6 +1089,7 @@ def static addTriggers(def job, def branch, def isPR, def architecture, def os, 
                             "(?i).*test\\W+${os}\\W+${architecture}\\W+${configuration}", null, arm64Users)
                             break
                         case 'pri1r2r':
+                        case 'gcstress0x3':
                         case 'gcstress0xc':
                             Utilities.addPrivateGithubPRTriggerForBranch(job, branch, contextString,
                             "(?i).*test\\W+${os}\\W+${architecture}\\W+${configuration}\\W+${scenario}", null, arm64Users)
@@ -1325,7 +1326,7 @@ combinedScenarios.each { scenario ->
                         
                         switch (architecture) {
                             case 'arm64':
-                                if (scenario != 'gcstress0xc') {
+                                if ((scenario != 'gcstress0x3') && (scenario != 'gcstress0xc')) {
                                     return
                                 }
                                 break
@@ -1649,7 +1650,9 @@ combinedScenarios.each { scenario ->
                                     
                                     break
                                 case 'arm64':
-                                    assert (scenario == 'default') || (scenario == 'pri1r2r') || (scenario == 'gcstress0xc')
+                                    assert (scenario == 'default') || (scenario == 'pri1r2r') || (scenario == 'gcstress0x3') || (scenario == 'gcstress0xc')
+                                    // Set time out
+                                    setTestJobTimeOut(newJob, scenario)
 
                                     // Debug runs take too long to run. So build job only.
                                     if (lowerConfiguration == "debug") {
@@ -2064,25 +2067,27 @@ combinedScenarios.each { scenario ->
                             }
 
                             if (scenario == 'coverage') {
-                                shell("./build.sh coverage verbose ${lowerConfiguration} ${architecture}")
-
-                                // Remove folders from obj that we don't expect to be covered. May update this later.
-                                shell("rm -rf ./bin/obj/Linux.x64.Release/src/ToolBox")
-                                shell("rm -rf ./bin/obj/Linux.x64.Release/src/debug")
-                                shell("rm -rf ./bin/obj/Linux.x64.Release/src/ilasm")
-                                shell("rm -rf ./bin/obj/Linux.x64.Release/src/ildasm")
-                                shell("rm -rf ./bin/obj/Linux.x64.Release/src/dlls/dbgshim")
-                                shell("rm -rf ./bin/obj/Linux.x64.Release/src/dlls/mscordac")
-                                shell("rm -rf ./bin/obj/Linux.x64.Release/src/dlls/mscordbi")
-
-                                // Run PAL tests
-                                shell("src/pal/tests/palsuite/runpaltests.sh \${WORKSPACE}/bin/obj/${osGroup}.${architecture}.${configuration} \${WORKSPACE}/bin/paltestout")
-
-                                // Remove obj files for PAL tests so they're not included in coverage results
-                                shell("rm -rf ./bin/obj/Linux.x64.Release/src/pal/tests")
 
                                 // Move coreclr to clr directory
                                 shell("rm -rf .clr; mkdir .clr; mv * .clr; mv .git .clr; mv .clr clr")
+
+                                // Build coreclr
+                                shell("./clr/build.sh coverage verbose ${lowerConfiguration} ${architecture}")
+
+                                // Remove folders from obj that we don't expect to be covered. May update this later.
+                                shell("rm -rf ./clr/bin/obj/Linux.x64.Release/src/ToolBox")
+                                shell("rm -rf ./clr/bin/obj/Linux.x64.Release/src/debug")
+                                shell("rm -rf ./clr/bin/obj/Linux.x64.Release/src/ilasm")
+                                shell("rm -rf ./clr/bin/obj/Linux.x64.Release/src/ildasm")
+                                shell("rm -rf ./clr/bin/obj/Linux.x64.Release/src/dlls/dbgshim")
+                                shell("rm -rf ./clr/bin/obj/Linux.x64.Release/src/dlls/mscordac")
+                                shell("rm -rf ./clr/bin/obj/Linux.x64.Release/src/dlls/mscordbi")
+
+                                // Run PAL tests
+                                shell("./clr/src/pal/tests/palsuite/runpaltests.sh \$(pwd)/clr/bin/obj/${osGroup}.${architecture}.${configuration} \$(pwd)/clr/bin/paltestout")
+
+                                // Remove obj files for PAL tests so they're not included in coverage results
+                                shell("rm -rf ./clr/bin/obj/Linux.x64.Release/src/pal/tests")
                                 
                                 // Unzip the tests first.  Exit with 0
                                 shell("unzip -q -o ./clr/bin/tests/tests.zip -d ./clr/bin/tests/Windows_NT.${architecture}.${configuration} || exit 0")
@@ -2124,7 +2129,7 @@ combinedScenarios.each { scenario ->
                 --useServerGC --coreclr-coverage \\
                 --coreclr-objs=\"\$(pwd)/clr/bin/obj/${osGroup}.${architecture}.${configuration}\" \\
                 --coreclr-src=\"\$(pwd)/clr/src\" \\
-                --coverage-output-dir=\"./coverage\" """)
+                --coverage-output-dir=\"\${WORKSPACE}/coverage\" """)
 
                             }
                             else {
@@ -2186,7 +2191,7 @@ combinedScenarios.each { scenario ->
 
                     if (scenario == 'coverage') {
                         // Publish coverage reports
-                        Utilities.addArchival(newJob, "coverage/**")
+                        Utilities.addHtmlPublisher(newJob, '${WORKSPACE}/coverage/Coverage/reports', 'Code Coverage Report', 'coreclr.html')
                         addEmailPublisher(newJob, 'clrcoverage@microsoft.com')
                     }
 

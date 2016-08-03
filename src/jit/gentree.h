@@ -495,11 +495,16 @@ public:
 
     bool isContainedLclField() const        { return isContained() && isLclField(); }
 
+    bool isContainedLclVar() const          {  return isContained() && (OperGet() == GT_LCL_VAR);  } 
+
     // Indicates whether it is a memory op.
     // Right now it includes Indir and LclField ops.
     bool isMemoryOp() const                 { return isIndir() || isLclField(); }
 
-    bool isContainedMemoryOp() const        { return isContained() && isMemoryOp(); }
+    bool isContainedMemoryOp() const        
+    { 
+        return (isContained() && isMemoryOp()) || isContainedLclVar(); 
+    }
 
     regNumber GetRegNum() const
     {
@@ -635,11 +640,14 @@ public:
     #define GTF_GLOB_EFFECT     (GTF_SIDE_EFFECT|GTF_GLOB_REF)
     #define GTF_ALL_EFFECT      (GTF_GLOB_EFFECT|GTF_ORDER_SIDEEFF)
 
-    // The extra flag GTF_DEAD is used to tell the consumer of these flags
-    // that we are calling in the context of performing a CSE, thus we 
+    // The extra flag GTF_IS_IN_CSE is used to tell the consumer of these flags
+    // that we are calling in the context of performing a CSE, thus we
     // should allow the run-once side effects of running a class constructor.
     //
-    #define GTF_PERSISTENT_SIDE_EFFECTS_IN_CSE (GTF_ASG|GTF_CALL|GTF_DEAD)
+    // The only requirement of this flag is that it not overlap any of the
+    // side-effect flags. The actual bit used is otherwise arbitrary.
+    #define GTF_IS_IN_CSE  GTF_MAKE_CSE
+    #define GTF_PERSISTENT_SIDE_EFFECTS_IN_CSE (GTF_ASG|GTF_CALL|GTF_IS_IN_CSE)
 
     // Can any side-effects be observed externally, say by a caller method?
     // For assignments, only assignments to global memory can be observed
@@ -672,10 +680,6 @@ public:
                                             // Use gtSetFlags() to check this flags
 #endif
     #define GTF_IND_NONFAULTING 0x00000800  // An indir that cannot fault.  GTF_SET_FLAGS is not used on indirs
-
-#if FEATURE_ANYCSE
-    #define GTF_DEAD            0x00001000  // this node won't be used any more
-#endif // FEATURE_ANYCSE
 
     #define GTF_MAKE_CSE        0x00002000  // Hoisted Expression: try hard to make this into CSE  (see optPerformHoistExpr)
     #define GTF_DONT_CSE        0x00004000  // don't bother CSE'ing this expr
@@ -1620,6 +1624,11 @@ public:
     // cast operations 
     inline var_types            CastFromType();
     inline var_types&           CastToType();
+
+    // Returns true if this gentree node is marked by lowering to indicate
+    // that codegen can still generate code even if it wasn't allocated a 
+    // register.
+    bool IsRegOptional() const;   
 
     // Returns "true" iff "*this" is an assignment (GT_ASG) tree that defines an SSA name (lcl = phi(...));
     bool IsPhiDefn();
